@@ -31,6 +31,7 @@ from discord.ext import commands, tasks
 import config
 import contest_manager as cm
 from database import Contest, Database
+import myrahub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("contest_bot")
@@ -327,6 +328,7 @@ async def before_state_machine():
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (id=%s)", bot.user, bot.user.id)
+    myrahub.setup_commands(bot.tree)
     try:
         synced = await bot.tree.sync()
         log.info("Synced %d slash command(s)", len(synced))
@@ -369,6 +371,20 @@ async def on_message(message: discord.Message):
         except discord.DiscordException:
             pass
     await bot.process_commands(message)
+
+
+# ---------------------------------------------------------------------------
+# MyraHub reaction listeners
+# ---------------------------------------------------------------------------
+
+@bot.event
+async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
+    await myrahub.on_reaction_add(reaction, user)
+
+
+@bot.event
+async def on_reaction_remove(reaction: discord.Reaction, user: discord.User):
+    await myrahub.on_reaction_remove(reaction, user)
 
 
 # ---------------------------------------------------------------------------
