@@ -1,3 +1,5 @@
 discord.py>=2.3.2
 python-dotenv>=1.0.0
 tzdata>=2024.1
+# For the Windows mpv_controller.py script only:
+# pywin32
