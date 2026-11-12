@@ -107,7 +107,7 @@ async def start_vote(interaction: discord.Interaction, action: str):
         description=(
             f"React with ✅ to {action} or ❌ to keep the current video.\n"
             f"Only people currently in the voice channel can vote.\n"
-            f"Voting ends in {VOTE_SECONDS} seconds. Majority wins."
+            f"Voting ends in {VOTE_SECONDS} seconds. Majority of voice members must vote yes."
         ),
         color=discord.Color.orange(),
     )
@@ -138,7 +138,8 @@ async def _end_vote_after(bot: commands.Bot, seconds: int):
     yes = len(vote.yes)
     no = len(vote.no)
     total_eligible = len(vote.voice_members)
-    majority = (yes > no) and (yes > 0)
+    # Majority of people currently in the voice channel must vote yes
+    majority = yes > (total_eligible / 2)
 
     result_text = (
         f"Vote finished: **{yes}** yes, **{no}** no "
