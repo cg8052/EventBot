@@ -43,6 +43,10 @@ VOTE_SECONDS = int(os.environ.get("MYRAHUB_VOTE_SECONDS", "60"))
 # File that stores suggested YouTube links (one per line).
 SUGGESTIONS_FILE = Path(os.environ.get("MYRAHUB_SUGGESTIONS_FILE", "myrahub_suggestions.txt"))
 
+# Streaming account that is never eligible to vote (username, case-insensitive).
+# This is the Discord user running the stream; it should not influence votes.
+STREAMING_USERNAME = os.environ.get("MYRAHUB_STREAMING_USERNAME", "myrabot_11496").lower()
+
 # ---------------------------------------------------------------------------
 # In-memory vote state
 # ---------------------------------------------------------------------------
@@ -59,8 +63,13 @@ class ActiveVote:
 active_vote: ActiveVote | None = None
 
 
+def _is_streaming_account(member: discord.Member | discord.User) -> bool:
+    """True if this user is the streaming account and should not vote."""
+    return (member.name or "").lower() == STREAMING_USERNAME
+
+
 def get_voice_members(guild: discord.Guild) -> set[int]:
-    """Return the set of non-bot user IDs currently in the target voice channel."""
+    """Return the set of non-bot, non-streaming user IDs currently in the target voice channel."""
     if VOICE_CHANNEL_ID:
         channel = guild.get_channel(VOICE_CHANNEL_ID)
     else:
@@ -68,7 +77,10 @@ def get_voice_members(guild: discord.Guild) -> set[int]:
         return set()
     if not channel or not isinstance(channel, discord.VoiceChannel):
         return set()
-    return {m.id for m in channel.members if not m.bot}
+    return {
+        m.id for m in channel.members
+        if not m.bot and not _is_streaming_account(m)
+    }
 
 
 async def start_vote(interaction: discord.Interaction, action: str):
@@ -83,7 +95,7 @@ async def start_vote(interaction: discord.Interaction, action: str):
         await interaction.response.send_message("This can only be used in a server.", ephemeral=True)
         return
 
-    # Determine voice members
+    # Determine eligible voice members (excludes bots and the streaming account)
     if VOICE_CHANNEL_ID:
         voice_members = get_voice_members(interaction.guild)
     else:
@@ -94,12 +106,24 @@ async def start_vote(interaction: discord.Interaction, action: str):
                 "You must be in a voice channel to start a vote.", ephemeral=True
             )
             return
-        voice_members = {m.id for m in voice.channel.members if not m.bot}
+        voice_members = {
+            m.id for m in voice.channel.members
+            if not m.bot and not _is_streaming_account(m)
+        }
 
     if len(voice_members) < 1:
         await interaction.response.send_message(
-            "No one is in the voice channel to vote.", ephemeral=True
+            "No eligible voters are in the voice channel.", ephemeral=True
         )
+        return
+
+    # Single eligible voter: pass immediately (no vote needed)
+    if len(voice_members) == 1:
+        await interaction.response.send_message(
+            f"Only one eligible voter in voice — **{action.upper()}** approved immediately."
+        )
+        await _send_control_signal(interaction.client, action)
+        log.info("Auto-approved %s (only 1 eligible voter)", action)
         return
 
     embed = discord.Embed(
@@ -107,7 +131,8 @@ async def start_vote(interaction: discord.Interaction, action: str):
         description=(
             f"React with ✅ to {action} or ❌ to keep the current video.\n"
             f"Only people currently in the voice channel can vote.\n"
-            f"Voting ends in {VOTE_SECONDS} seconds. Majority of voice members must vote yes."
+            f"The streaming account ({STREAMING_USERNAME}) is not eligible.\n"
+            f"Voting ends in {VOTE_SECONDS} seconds. Majority of eligible voice members must vote yes."
         ),
         color=discord.Color.orange(),
     )
@@ -138,12 +163,12 @@ async def _end_vote_after(bot: commands.Bot, seconds: int):
     yes = len(vote.yes)
     no = len(vote.no)
     total_eligible = len(vote.voice_members)
-    # Majority of people currently in the voice channel must vote yes
+    # Majority of eligible people currently in the voice channel must vote yes
     majority = yes > (total_eligible / 2)
 
     result_text = (
         f"Vote finished: **{yes}** yes, **{no}** no "
-        f"({total_eligible} people were in voice).\n"
+        f"({total_eligible} eligible people were in voice).\n"
     )
     if majority:
         result_text += f"**{vote.action.upper()}** approved!"
@@ -193,7 +218,12 @@ async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
         return
     if reaction.message.id != active_vote.message.id:
         return
-    if user.bot:
+    if user.bot or _is_streaming_account(user):
+        # Bots and the streaming account cannot vote
+        try:
+            await reaction.remove(user)
+        except discord.DiscordException:
+            pass
         return
     if user.id not in active_vote.voice_members:
         # Not in the voice channel — ignore
@@ -216,7 +246,7 @@ async def on_reaction_remove(reaction: discord.Reaction, user: discord.User):
     global active_vote
     if not active_vote or active_vote.ended:
         return
-    if reaction.message.id != active_vote.message.id or user.bot:
+    if reaction.message.id != active_vote.message.id or user.bot or _is_streaming_account(user):
         return
     emoji = str(reaction.emoji)
     if emoji == "✅":
